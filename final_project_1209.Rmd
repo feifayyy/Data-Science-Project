@@ -1,0 +1,613 @@
+---
+title: "Final Project"
+output: html_document
+---
+
+You and your team of data scientists were hired by a company to gain insights on the dataset in your chosen prompt. 
+
+1. Perform any necessary data pre-processing and cleaning, and document your steps. Depending on the prompt you selected, this may involve transforming variables, creating new variables, and merging data frames. In particular, you may need to make some decisions on how to handle missing data, such as removing rows or columns with a significant amount of missing observations, creating an "unknown" category, or replacing/imputing the missing values. You do not need to develop a rigorous process or cite references, but please briefly justify your choices.
+
+**[Answers written as comments]**
+
+2. Make and interpret 4-10 visualizations to help you understand the relationships between the variables in your dataset. We highly encourage you to explore the data on your own, but when preparing your response to this question, please be parsimonious in your plots and select visualizations that help you tell a story about the data. If you need to make additional plots to support your responses to the other questions (e.g. to motivate data cleaning or modeling choices), that's fine. 
+
+**[Answers written as comments]**
+
+3. Build any 2 machine learning models that use your choice of covariates to predict the given outcome variable. Explain why you chose those covariates and interpret the model performances. 
+
+**[Answers written in Section 3.1 and 3.3.2]**
+
+4. The company stakeholders want to know what decision they should make on their stated goal/question. Based on your analysis, make recommendations for a non-technical audience 
+
+**[Answers written in Section 3.4.3]**
+
+5. Any additional information that might be useful to collect/have? Other open-ended/non-coding question(s)? 
+
+**[Answers written in Section 3.4.3]**
+
+
+
+### NHANES (2013-2014)
+
+The National Health and Nutrition Examination Survey (NHANES) assesses the health and nutritional status of adults and children in the United States. The `covariate_df` data frame in the `covariate_df.rData` file contains the demographic, examination, diet, and lab data from [NHANES 2013-2014](https://www.kaggle.com/datasets/cdc/national-health-and-nutrition-examination-survey). You can peruse the dictionaries for the variables on the CDC website: [demographics](https://wwwn.cdc.gov/Nchs/Nhanes/Search/variablelist.aspx?Component=Demographics&CycleBeginYear=2013), 
+[examinations](https://wwwn.cdc.gov/Nchs/Nhanes/Search/variablelist.aspx?Component=Examination&CycleBeginYear=2013), 
+[diet](https://wwwn.cdc.gov/Nchs/Nhanes/Search/variablelist.aspx?Component=Dietary&CycleBeginYear=2013), and
+[lab](https://wwwn.cdc.gov/Nchs/Nhanes/Search/variablelist.aspx?Component=Laboratory&CycleBeginYear=2013). Your goal is to use these covariates to predict the occurrence of diabetes, cancer, heart attack, stroke, OR depression. The company wants you to recommend a predictive model and identify key variables that appear to be associated with the outcome disease. 
+
+As part of data processing, choose ONE of the five diseases and merge the corresponding variable from the `questionnaire.csv` dataset with `covariate_df`. This disease is the outcome that your model should predict. The relevant variable names in `questionnaire.csv` are: DIQ010 (diabetes), MCQ220 (cancer), MCQ160E (heart attack), MCQ160F (stroke), and DPQ020 (depression). (You can view the entire questionnaire dictionary [here](https://wwwn.cdc.gov/Nchs/Nhanes/Search/variablelist.aspx?Component=Questionnaire&CycleBeginYear=2013).) For each disease variable, you can take `1` to be affected, `2` to be unaffected, and all other numeric values to be unknown/ignored. 
+
+```{r, message=FALSE}
+#####  Load library and data set
+library(tidyverse)
+library(caret)
+library(e1071)
+library(corrplot)
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+library(class)
+library(caret)
+library(pROC)
+library(randomForest)
+library(rpart)
+library(forcats)
+library(viridis)
+library(rpart.plot)
+
+questionnaire <- read.csv("questionnaire.csv")
+load('covariate_df.rData')
+df <- questionnaire %>% inner_join(covariate_df,
+                                  by = join_by(SEQN))
+```
+
+
+1. Data Cleaning
+```{r}
+##### Data Cleaning
+
+#Only including adults 20 years and older##
+
+###Outcome###
+# Diabetes status
+final_df <- data.frame(matrix(ncol = 0, nrow = nrow(df)))
+final_df$DIQ010 <- ifelse(df$DIQ010 == 2, 0,
+                    ifelse(df$DIQ010 == 1, 1,
+                           NA))
+
+###Variables###
+
+##NHANES 2013-2014 Demographics Variable List##
+# gender of participants
+final_df$RIAGENDR <- ifelse(df$RIAGENDR == 1, "male",
+                      ifelse(df$RIAGENDR == 2, "female",
+                             NA))
+
+# age of participants (keep as continuous >= 20)
+final_df$RIDAGEYR <- ifelse(df$RIDAGEYR >= 20, df$RIDAGEYR, NA)
+
+# highest grade or level of school
+final_df$DMDEDUC <- ifelse(df$DMDEDUC2 == 1, "Less than 9th grade",
+                           ifelse(df$DMDEDUC2 == 2, "9th to 11th grade",
+                                  ifelse(df$DMDEDUC2 == 3, "High school graduate/GED",
+                                         ifelse(df$DMDEDUC2 == 4, "Some college",
+                                                ifelse(df$DMDEDUC2 == 5, "College graduate or above",
+                                                       NA)))))
+
+
+##NHANES 2013-2014 Examination Variable List##
+# diastolic blood pressure, average of the four readings, ignore NA in one participant if other readings are valid
+final_df$BPXDI <- rowMeans(df[, c("BPXDI1", "BPXDI2", "BPXDI3", "BPXDI4")], na.rm = TRUE)
+
+# systolic blood pressure, average of the four readings, ignore NA in one participant if other readings are valid
+final_df$BPXSY <- rowMeans(df[, c("BPXSY1", "BPXSY2", "BPXSY3", "BPXSY4")], na.rm = TRUE)
+
+# BMI (keep as original)
+final_df$BMXBMI <- df$BMXBMI
+
+# waist circumference (keep as original)
+final_df$BMXWAIST <- df$BMXWAIST
+
+
+##NHANES 2013-2014 Dietary Variable List##
+# Energy kcal (keep as original)
+final_df$DR1TKCAL <- df$DR1TKCAL
+
+# Protein gm (keep as original)
+final_df$DR1TPROT <- df$DR1TPROT
+
+# Fat gm (keep as original)
+final_df$DR1TTFAT <- df$DR1TTFAT
+
+# Carb gm (keep as original)
+final_df$DR1TCARB <- df$DR1TCARB
+
+# Fiber gm (keep as original)
+final_df$DR1TFIBE <- df$DR1TFIBE
+
+# Sugar gm (keep as original)
+final_df$DR1TSUGR <- df$DR1TSUGR
+
+# Sodium mg (keep as original)
+final_df$DR1TSODI <- df$DR1TSODI
+
+# Alcohol gm (keep as original)
+final_df$DR1TALCO <- df$DR1TALCO
+
+# Caffeine mg (keep as original)
+final_df$DR1TCAFF <- df$DR1TCAFF
+
+
+##NHANES 2013-2014 Laboratory Variable List##
+# Total cholesterol mg/dL (keep as original)
+final_df$LBXTC <- df$LBXTC
+
+# Direct HDL-cholesterol mmol/L (keep as original)
+final_df$LBDHDDSI <- df$LBDHDDSI
+
+# Insulin pmol/L (keep as original)
+final_df$LBDINSI <- df$LBDINSI
+
+
+###Handling missing data###
+# Delete rows with NA values
+final_df <- na.omit(final_df)
+
+###Check number of cases###
+sum(final_df$DIQ010)
+# 242 cases
+```
+
+2. Visualization
+```{r, warning=FALSE}
+##  Visualization
+
+RIAGENDRplot <- final_df %>% group_by(RIAGENDR, DIQ010) %>% summarize("count"=n(), .groups = "drop") %>% ggplot(aes(RIAGENDR, count))+ geom_col(aes(fill = as.factor(DIQ010)), position="dodge") + labs(x="Gender", y="Number of Diabetes cases")+ scale_fill_discrete(name="Diabetes Status", labels = c("No Diabetes", "Diabetes"))
+RIAGENDRplot
+# The prevalence of diabetes are similar in both males and females.
+
+RIDAGEYRplot <- ggplot(final_df, aes(RIDAGEYR, DIQ010))+ geom_col()+ labs(x="Age", y="Number of Diabetes cases")
+RIDAGEYRplot
+# The prevalence of diabetes are increase with age. The older participants are more likely to have diabetes.
+
+BMXBMIplot <- final_df %>% ggplot(aes(BMXBMI))+geom_histogram(binwidth = 5)+ facet_wrap(~DIQ010, labeller = labeller(DIQ010 = c('0'="No Diabetes", '1'="Diabetes"))) + labs(x="BMI", y="Count")
+BMXBMIplot
+# There is not significant difference in BMI distribution among participants with and without diabetes, but it might due to the small sample size in diabetes group.
+
+DR1TCAFFplot<- ggplot(final_df, aes(x = factor(DIQ010), y = DR1TCAFF)) + geom_boxplot()+ scale_y_log10() +labs(x= "Diabetes", y= "Caffeine (log)")+  scale_x_discrete(labels = c("0"="No Diabetes", "1"="Diabetes"))
+DR1TCAFFplot
+# In this graph, we can see that caffeine consumption is not a good predictor of diabetes. 
+
+LBDHDDSIplot <- final_df %>% ggplot(aes(x = factor(DIQ010), y = LBDHDDSI)) + labs(x= "Diabetes", y="Direct HDL-Cholesterol (mmol/L)")+ geom_boxplot() +scale_x_discrete(labels = c("0"="No Diabetes", "1"="Diabetes"))
+LBDHDDSIplot
+# The mean Direct HDL-Cholesterol is slightly different among people with diabetes and those without diabetes. People without diabetes has a slightly higher mean Direct HDL-Cholesterol than those with diabetes.
+
+
+BMXWAISTplot <- final_df %>%
+  ggplot(aes(x = BMXWAIST)) +
+  geom_histogram(bins = 20) +
+  labs(x= "Waist Circumference (cm)", y="Number of Diabetes cases")+
+  facet_wrap(~ DIQ010)
+BMXWAISTplot
+# The distribution of mean waist circumference is different among people with diabetes and those without diabetes. There is a higher mean waist circumference among people with diabetes. 
+
+LBDINSIplot<- ggplot(final_df, aes(x = factor(DIQ010), y = LBDINSI)) + geom_boxplot()+scale_y_log10()+labs(x="Diabetes", y= "Log_Insulin(pmol/L)") + scale_x_discrete(labels = c("0"="No Diabetes", "1"="Diabetes"))
+LBDINSIplot
+# In this graph, we can see that the median insulin level is higher in the diabetes participants compared to that of non-diabetes participants.
+
+```
+
+
+
+
+3. Machine Learning    
+3.1 Associations among variables
+```{r, message=FALSE}
+## heatmap
+# Convert factors to numeric
+numeric_df <- final_df %>%
+  mutate(RIAGENDR = as.numeric(as.character(RIAGENDR)),
+         DMDEDUC = as.numeric(as.character(DMDEDUC)))
+
+# Ensure no constant columns
+numeric_df <- numeric_df %>%
+  select_if(~var(.) != 0)
+
+# Compute correlation matrix
+correlation_matrix <- cor(numeric_df, use = "pairwise.complete.obs")
+
+# rename variables for readability
+actual_names <- c(
+  DIQ010 = "Diabetes status",
+  RIAGENDR = "Gender of participants",
+  RIDAGEYR = "Age of participants",
+  DMDEDUC = "Highest grade or level of school",
+  BPXDI = "Diastolic BP (avg)",
+  BPXSY = "Systolic BP (avg)",
+  BMXBMI = "BMI",
+  BMXWAIST = "Waist Circumference",
+  DR1TKCAL = "Energy kcal",
+  DR1TPROT = "Protein gm",
+  DR1TTFAT = "Fat gm",
+  DR1TCARB = "Carb gm",
+  DR1TFIBE = "Fiber gm",
+  DR1TSUGR = "Sugar gm",
+  DR1TSODI = "Sodium mg",
+  DR1TALCO = "Alcohol gm",
+  DR1TCAFF = "Caffeine mg",
+  LBXTC = "Total cholesterol mg/dL",
+  LBDHDDSI = "Direct HDL-cholesterol mmol/L",
+  LBDINSI = "Insulin pmol/L"
+)
+
+
+# Ensure  'actual_names' correspond to 'correlation_matrix'
+colnames(correlation_matrix) <- actual_names[colnames(correlation_matrix)]
+rownames(correlation_matrix) <- actual_names[rownames(correlation_matrix)]
+
+# heatmap with adjusted label and number sizes
+corrplot(correlation_matrix, method = "color", order = "AOE", addCoef.col = "dark grey",
+         tl.col = "black", tl.srt = 45, tl.cex = 0.6, number.cex = 0.5, # Adjust these values as needed
+         type = "upper", diag = FALSE)
+
+```
+
+**Observations: **  
+In this correlation matrix, strong positive correlations are indicated by darker blue, while negative are indicated by darker red. A strong positive association between BMI and waist circumference, and a moderately positive association between sugar and insulin levels were observed. 
+
+
+3.2 Model Building
+```{r}
+set.seed(123) 
+# split training and testing sets
+index <- createDataPartition(final_df$DIQ010, p = 0.7, list = TRUE)
+train_set <- final_df[index[[1]], ]
+test_set <- final_df[-index[[1]], ]
+```
+
+3.2.1 Logistic regression
+```{r, message=FALSE}
+## 1.logistic regression
+logit_model <- glm(DIQ010 ~ ., data = train_set, family = "binomial")
+
+# Predict
+logit_predictions_prob <- predict(logit_model, newdata = test_set, type = "response")
+logit_predictions_label <- ifelse(logit_predictions_prob > 0.5, 1, 0)
+
+# diagnostics
+logit_conf_matrix <- table(test_set$DIQ010, logit_predictions_label)
+logit_accuracy <- mean(logit_predictions_label == test_set$DIQ010)
+logit_sensitivity <- logit_conf_matrix[2,2] / sum(logit_conf_matrix[2,])
+logit_specificity <- logit_conf_matrix[1,1] / sum(logit_conf_matrix[1,])
+
+# ROC Curves
+roc_logit <- roc(test_set$DIQ010, logit_predictions_prob)
+
+# AUC
+auc_logit <- auc(roc_logit)
+```
+
+3.2.2 Naive Bayes
+```{r, message=FALSE}
+## 2.Naive Bayes 
+nb_model <- naiveBayes(DIQ010 ~ ., data = train_set)
+
+# Predict
+nb_predictions_prob <- predict(nb_model, newdata = test_set, type = "raw")
+nb_predictions_label <- ifelse(nb_predictions_prob[,2] > 0.5, 1, 0)
+
+# diagnostics
+nb_conf_matrix <- table(test_set$DIQ010, nb_predictions_label)
+nb_accuracy <- mean(nb_predictions_label == test_set$DIQ010)
+nb_sensitivity <- nb_conf_matrix[2,2] / sum(nb_conf_matrix[2,])
+nb_specificity <- nb_conf_matrix[1,1] / sum(nb_conf_matrix[1,])
+
+# ROC Curves
+roc_nb <- roc(test_set$DIQ010, nb_predictions_prob[,2]) 
+
+# AUC
+auc_nb <- auc(roc_nb)
+```
+
+3.2.3 KNN
+```{r, message=FALSE}
+# 3. KNN
+# Normalize the data
+preProcess_range_model <- preProcess(train_set, method = 'range')
+train_set_norm <- predict(preProcess_range_model, train_set)
+test_set_norm <- predict(preProcess_range_model, test_set)
+
+train_set_norm$DIQ010 <- as.factor(train_set_norm$DIQ010)
+test_set_norm$DIQ010 <- as.factor(test_set_norm$DIQ010)
+
+# KNN model 
+knn_model_fit<-knn3(DIQ010~., data=train_set_norm)
+
+# Predict
+knn_predictions <- predict(knn_model_fit, test_set_norm[, -which(names(test_set_norm) == "DIQ010")], type = "class")
+knn_predictions_prob <- predict(knn_model_fit, test_set_norm[, -which(names(test_set_norm) == "DIQ010")], type = "prob")
+
+# diagnostics
+knn_conf_matrix <- table(test_set_norm$DIQ010, knn_predictions)
+knn_accuracy <- mean(knn_predictions == test_set_norm$DIQ010)
+knn_sensitivity <- knn_conf_matrix[2,2] / sum(knn_conf_matrix[2,])
+knn_specificity <- knn_conf_matrix[1,1] / sum(knn_conf_matrix[1,])
+
+# ROC Curve
+roc_knn <- roc(test_set_norm$DIQ010, knn_predictions_prob[,2])
+
+# AUC
+auc_knn <- auc(roc_knn)
+```
+
+3.2.4 Decision Tree
+```{r, message=FALSE}
+# 4. Decision Tree
+
+# Convert DIQ010 to a factor
+train_set$DIQ010 <- as.factor(train_set$DIQ010)
+test_set$DIQ010 <- as.factor(test_set$DIQ010)
+
+# Fit
+dt_model <- rpart(DIQ010 ~ ., data = train_set, method = "class")
+
+# Predict
+dt_predictions_prob <- predict(dt_model, newdata = test_set, type = "prob")[,2]
+dt_predictions_label <- ifelse(dt_predictions_prob > 0.5, 1, 0) 
+
+# diagnostics 
+dt_conf_matrix <- table(test_set$DIQ010, dt_predictions_label)
+dt_accuracy <- mean(dt_predictions_label == test_set$DIQ010)
+dt_sensitivity <- dt_conf_matrix[2,2] / sum(dt_conf_matrix[2,])
+dt_specificity <- dt_conf_matrix[1,1] / sum(dt_conf_matrix[1,])
+
+# Plot the decision tree with rpart.plot package for a better visualization
+rpart.plot(dt_model, main="Decision Tree", extra=102, under=TRUE, faclen=0)
+
+
+# ROC curve
+roc_dt <- roc(response = test_set$DIQ010, predictor = dt_predictions_prob)
+
+# AUC
+auc_dt <- auc(roc_dt)
+```
+
+
+3.2.5 Random Forest
+
+```{r, message=FALSE}
+# 5. Random Forest
+rf_model <- randomForest(DIQ010 ~ ., data = train_set, ntree = 500, mtry = sqrt(ncol(train_set) - 1))
+
+# Convert DIQ010 to a factor
+train_set$DIQ010 <- as.factor(train_set$DIQ010)
+test_set$DIQ010 <- as.factor(test_set$DIQ010)
+
+# train
+rf_model <- randomForest(DIQ010 ~ ., data = train_set)
+
+# predict
+rf_predictions_prob <- predict(rf_model, newdata = test_set, type = "prob")
+rf_predictions_label <- ifelse(rf_predictions_prob[,2] > 0.5, 1, 0)  
+
+# diagnostics
+rf_conf_matrix <- table(test_set$DIQ010, rf_predictions_label)
+rf_accuracy <- mean(rf_predictions_label == test_set$DIQ010)
+rf_sensitivity <- rf_conf_matrix[2,2] / sum(rf_conf_matrix[2,])
+rf_specificity <- rf_conf_matrix[1,1] / sum(rf_conf_matrix[1,])
+
+# ROC curve
+roc_rf <- roc(response = test_set$DIQ010, predictor = rf_predictions_prob[,2])
+
+# AUC
+auc_rf <- auc(roc_rf)
+```
+
+
+
+3.3 Comparison between different models
+3.3.1 ROC and AUC
+```{r}
+# summary table
+model_performance <- data.frame(
+  Model = c("Logistic Regression", "Naive Bayes", "KNN", "Random Forest", "Decision Tree"),
+  Accuracy = c(logit_accuracy, nb_accuracy, knn_accuracy, rf_accuracy, dt_accuracy),
+  Sensitivity = c(logit_sensitivity, nb_sensitivity, knn_sensitivity, rf_sensitivity, dt_sensitivity),
+  Specificity = c(logit_specificity, nb_specificity, knn_specificity, rf_specificity, dt_specificity),
+  AUC = c(auc_logit, auc_nb, auc_knn, auc_rf, auc_dt)
+)
+
+# Round to three decimal
+numeric_columns <- sapply(model_performance, is.numeric)
+model_performance[numeric_columns] <- lapply(model_performance[numeric_columns], function(x) round(x, 3))
+
+model_performance
+
+# summary figure
+plot(roc_logit, col = "red")
+lines(roc_nb, col = "blue")
+lines(roc_knn, col = "green")
+lines(roc_rf, col = "purple")
+lines(roc_dt, col = "orange")
+
+legend_labels <- c(
+  paste("Logistic Regression (AUC =", round(auc_logit, 3),")"),
+  paste("Naive Bayes (AUC =", round(auc_nb, 3),")"),
+  paste("KNN (AUC =", round(auc_knn, 3),")"),
+  paste("Random Forest (AUC =", round(auc_rf, 3),")"),
+  paste("Decision Tree (AUC =", round(auc_dt, 3),")")
+)
+
+legend("bottomright", legend = legend_labels, col = c("red", "blue", "green", "purple", "orange"), lty = 1, cex = 0.75)
+
+
+```
+
+
+
+3.3.2 Performance
+```{r}
+## Performance of the models
+
+binary_class_metric <- function(true, predict, positive_level) {
+  # Ensure arguments are factors and have same levels
+  true <- factor(true, levels = c(positive_level, ifelse(positive_level == "1", "0", "1")))
+  predict <- factor(predict, levels = levels(true))
+
+  # metrics
+  tp = sum(true == positive_level & predict == positive_level)  # True Positives
+  fn = sum(true == positive_level & predict != positive_level)  # False Negatives
+  tn = sum(true != positive_level & predict != positive_level)  # True Negatives
+  fp = sum(true != positive_level & predict == positive_level)  # False Positives
+
+  accuracy = (tp + tn) / (tp + tn + fp + fn)
+  precision = tp / (tp + fp)
+  sensitivity = tp / (tp + fn)  #true positive
+  specificity = tn / (tn + fp)
+  f1_score = 2 * precision * sensitivity / (precision + sensitivity)
+
+  return(list(accuracy = accuracy,
+              precision = precision,
+              sensitivity = sensitivity,
+              specificity = specificity,
+              f1_score = f1_score)) }
+
+dt_metrics <- binary_class_metric(true = test_set$DIQ010, predict = dt_predictions_label, positive_level = "1")
+
+# Evaluation
+logit_metric=binary_class_metric(true=test_set$DIQ010,
+                                 predict=logit_predictions_label,
+                                 positive_level=1)
+
+naive_bayes_metric=binary_class_metric(true=test_set$DIQ010,
+                                 predict=nb_predictions_label,
+                                 positive_level=1)
+
+knn_metric=binary_class_metric(true=test_set$DIQ010,
+                                 predict=knn_predictions,
+                                 positive_level=1)
+
+rf_metric=binary_class_metric(true=test_set$DIQ010,
+                                 predict=rf_predictions_label,
+                                 positive_level=1)
+
+
+
+# Create name list
+metrics_list <- list(
+  "Logistic Regression" = logit_metric,
+  "Naive Bayes" = naive_bayes_metric,
+  "KNN" = knn_metric,
+  "Random Forest" = rf_metric,
+  "Decision Tree" = dt_metrics
+)
+
+# Combine to one dataframe
+results_df <- bind_rows(metrics_list, .id = 'model') %>%
+  pivot_longer(cols = -model,
+               names_to = 'metric',
+               values_to = 'value')
+
+# Plot
+ggplot(results_df, aes(x = model, y = value, fill = metric)) +
+  geom_col(position = position_dodge()) +
+  geom_text(aes(label = round(value, 2)), vjust = -0.3, position = position_dodge(width = 0.9), size = 1.7) +
+  facet_wrap(~metric, scales = 'free_y') +
+  labs(x = "Model",
+       y = "Value",
+       fill = "Metric") +
+  coord_flip() +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+
+```
+
+**Interpretation: **  
+The high specificity across all five models suggests they are good at identifying true negatives, but the varying sensitivity indicates that the models differ significantly in their ability to identify true positives.  
+The model performance comparison indicates that **Logistic Regression** and **Random Forest model** models have high accuracy and specificity, but when considering other metrics such as the precision, Random Forest performs better overall. The ROC curve figure in Section 3.3.1 also supports this. Therefore, we would choose the **Random Forest model** as our final model as it demonstrates great balance across all diagnostics.
+
+
+3.3.3 Visualization of Random Forest 
+
+```{r, message=FALSE, warning=FALSE}
+set.seed(123)
+index <- createDataPartition(final_df$DIQ010, p = 0.7, list = TRUE)
+train_set <- final_df[index[[1]], ]
+test_set <- final_df[-index[[1]], ]
+
+rf_model <- randomForest(DIQ010 ~ ., data = train_set, ntree = 500, mtry = sqrt(ncol(train_set) - 1))
+
+# Extract variable importance
+importance <- importance(rf_model)
+importance_df <- as.data.frame(importance)
+importance_df$Variable <- row.names(importance_df)
+
+
+importance_df <- importance_df %>%
+  mutate(Variable = fct_reorder(Variable, IncNodePurity))
+  
+
+# Create a named vector of actual names
+actual_names <- c(
+  RIAGENDR = "Gender",
+  RIDAGEYR = "Age",
+  DMDEDUC = "Highest grade of Education",
+  BPXDI = "Diastolic BP",
+  BPXSY = "Systolic BP",
+  BMXBMI = "BMI",
+  BMXWAIST = "Waist Circumference",
+  LBXTC = "Total cholesterol",
+  LBDHDDSI = "HDL-cholesterol",
+  LBDINSI = "Insulin",
+  DR1TKCAL = "Energy",
+  DR1TPROT = "Protein",
+  DR1TTFAT = "Fat",
+  DR1TCARB = "Carb",
+  DR1TFIBE = "Fiber",
+  DR1TSUGR = "Sugar",
+  DR1TSODI = "Sodium",
+  DR1TALCO = "Alcohol",
+  DR1TCAFF = "Caffeine"
+)
+
+# Replace factor levels with names
+importance_df$Variable <- factor(importance_df$Variable, levels = names(actual_names), labels = actual_names)
+
+# Reorder
+importance_df <- importance_df %>%
+  mutate(Variable = fct_reorder(Variable, IncNodePurity))
+
+# plot 
+ggplot(importance_df, aes(y = Variable, x = IncNodePurity, fill = Variable)) +
+  geom_col(show.legend = FALSE) +
+  coord_flip() + 
+  scale_fill_viridis_d(option = "D", begin = 0.3, end = 0.9) +
+  geom_text(aes(label = round(IncNodePurity, 2)), 
+            hjust = 0.5, 
+            size = 3.0) + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5))
+```
+
+
+
+**Interpretation: **  
+For the Random Forest model, the bar chart demonstrates the contribution of each predictor to the predictive accuracy of the model. Age, total cholesterol, waist circumference, insulin, and sugar intake are identified as the most salient predictors, all with an importance scores over 10.  
+In contrast, gender, and alcohol consumption manifest as variables with minimal predictive value. 
+
+
+
+
+#### Q4. Recommendations for a non-technical audience 
+
+After evaluating various health-related factors and their impact in diabetes, we highly recommend focusing on monitoring and managing age, cholesterol levels, waist circumference, insulin, and sugar intake, as they have been identified as key predictors of diabetes. Using such predictive models can be beneficial in the early identification of individuals at risk, allowing for timely interventions for diabetes. Detailed suggestions include:  
+
+**1) Prioritize age management: **While age is a non-modifiable factor, annually body tests and diabetes screening are necessary, especially for the elderly.  
+
+**2) Monitor cholesterol and waist circumference: **High total cholesterol and larger waist circumference are strong indicators of potential cardiovascular risk. Regular monitoring and lifestyle interventions such as diet and exercise can be effective.  
+
+**3) Reduce sugar intake and insulin levels: **These are also critical factors in managing diabetes risk.   
+
+#### Q5. Any additional information
+
+Additional information for the model's predictive capability might include genetic markers, detailed dietary patterns, physical activity levels, and psychosocial factors, which could provide a more comprehensive view of an individual's risk profile.  
+Furthermore, gathering longitudinal data could allow for the assessment of how these variables changes over time can also improve the predictive power of the models.
+
